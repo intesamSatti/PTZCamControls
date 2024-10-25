@@ -28,6 +28,10 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
   const mouseDownCommandRef = useRef(false);
   const [applyConstraintsInProcess, setApplyConstraintsInProcess] = useState(false);
   const isMovingRef = useRef(false);
+  const [capabilities, setCapabilities] = useState(null);
+  const panIncrement = useRef(0);
+  const tiltIncrement = useRef(0);
+  const zoomIncrement = useRef(0);
 
   useEffect(() => {
     connectCamera();
@@ -65,6 +69,8 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
     setTrack(videoTrack);
     const settings = videoTrack.getSettings();
     const capabilities = videoTrack.getCapabilities();
+    setCapabilities(capabilities);
+    calculateIncrements(capabilities);
     console.log("capabilities");
     console.log(capabilities);
     setAction({
@@ -75,6 +81,28 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
     const videoElement = document.getElementById('videoElement');
     videoElement.srcObject = stream; // Set the video element's source to the stream
   };
+
+  const calculateIncrements = (capabilities) => {
+    if (capabilities.pan) {
+        const panRange = capabilities.pan.max - capabilities.pan.min;
+        panIncrement.current = panRange * 0.03;
+    }
+
+    if (capabilities.tilt) {
+        const tiltRange = capabilities.tilt.max - capabilities.tilt.min;
+        tiltIncrement.current = tiltRange * 0.03;
+    }
+
+    if (capabilities.zoom) {
+        const zoomRange = capabilities.zoom.max - capabilities.zoom.min;
+        zoomIncrement.current = zoomRange * 0.03;
+    }
+
+    console.log(`Pan Increment: ${panIncrement.current}`);
+    console.log(`Tilt Increment: ${tiltIncrement.current}`);
+    console.log(`Zoom Increment: ${zoomIncrement.current}`);
+};
+
 
   const handleError = (error) => {
     console.error('Camera access error:', error);
@@ -88,22 +116,54 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
     }
     if (applyConstraintsInProcess) {
       console.log('Constraints apply in process, return:', applyConstraintsInProcess);
-      //await new Promise(resolve => setTimeout(resolve, 300));
       return "failed";
     }
   
     setApplyConstraintsInProcess(true);
-    const constraints = { advanced: [{ [command]: newVal }] };
+    
+    if (!capabilities || !capabilities.pan || !capabilities.tilt || !capabilities.zoom) {
+      //console.log('Capabilities not available yet or incomplete');
+      setApplyConstraintsInProcess(false);
+      return "failed";
+    }
+  
+    let adjustedValue = newVal;
+  
+    switch (command) {
+      case 'pan':
+        adjustedValue = Math.min(Math.max(newVal, capabilities.pan.min), capabilities.pan.max);
+        break;
+      case 'tilt':
+        adjustedValue = Math.min(Math.max(newVal, capabilities.tilt.min), capabilities.tilt.max);
+        break;
+      case 'zoom':
+        adjustedValue = Math.min(Math.max(newVal, capabilities.zoom.min), capabilities.zoom.max);
+        break;
+      default:
+        console.error('Invalid command:', command);
+        setApplyConstraintsInProcess(false);
+        return "failed";
+    }
+    if(adjustedValue !== newVal){
+      console.log("DDDOOONNEEEEEEEEEEEE ADDDJUST",adjustedValue,newVal);
+    }
+    const currentActionValue = actionRef.current[command];
+    if (adjustedValue === currentActionValue) {
+      setApplyConstraintsInProcess(false);
+      //console.log(`No change for ${command}, already at ${adjustedValue}`);
+      return "failed";
+    }
+  
+    const constraints = { advanced: [{ [command]: adjustedValue }] };
   
     try {
-      console.log("applying contrains",constraints)
+      console.log("applying constraints", constraints);
       await track.applyConstraints(constraints); // Awaiting the constraint application
       setApplyConstraintsInProcess(false);
   
-      // Update the action state
       setAction((prevAction) => ({
         ...prevAction,
-        [command]: newVal
+        [command]: adjustedValue
       }));
     } catch (err) {
       setApplyConstraintsInProcess(false);
@@ -128,10 +188,10 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
       
       const response = await controlCamera(command, increment);      
       if (response === 'failed') {
-        console.log("failed cancelling this loop check");
+        //console.log("failed cancelling this loop check");
         return;
       }
-      let holdMultipler = 8;
+      let holdMultipler = 7;
       let resetMultiplier = false;
       while (mouseDownRef.current) {
         if (mouseDownCommandRef.current.command !== command || mouseDownCommandRef.current.increment !== increment) {
@@ -147,7 +207,7 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
           return;
         }
         if (resetMultiplier) {
-          holdMultipler = 8;
+          holdMultipler = 7;
           resetMultiplier = false;  // Reset the flag after resetting the multiplier
         }
       }
@@ -189,27 +249,27 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
       <div className="ptz-controls">
         <button
           className="ptz-button"
-          onMouseDown={() => {mouseDownRef.current= true; startContinuousMovement('tilt', 20000)}}
+          onMouseDown={() => {mouseDownRef.current= true; startContinuousMovement('tilt', tiltIncrement.current)}}
           onMouseUp={stopMovement}
           onMouseLeave={stopMovement}
         >↑</button>
         <div className="ptz-horizontal">
           <button
             className="ptz-button"
-            onMouseDown={() =>  {mouseDownRef.current= true;  startContinuousMovement('pan', -20000)}}
+            onMouseDown={() =>  {mouseDownRef.current= true;  startContinuousMovement('pan', -panIncrement.current)}}
             onMouseUp={stopMovement}
             onMouseLeave={stopMovement}
           >←</button>
           <button
             className="ptz-button"
-            onMouseDown={() =>  {mouseDownRef.current= true;  startContinuousMovement('pan', 20000)}}
+            onMouseDown={() =>  {mouseDownRef.current= true;  startContinuousMovement('pan', panIncrement.current)}}
             onMouseUp={stopMovement}
             onMouseLeave={stopMovement}
           >→</button>
         </div>
         <button
           className="ptz-button"
-          onMouseDown={() =>  {mouseDownRef.current= true;  startContinuousMovement('tilt', -20000)}}
+          onMouseDown={() =>  {mouseDownRef.current= true;  startContinuousMovement('tilt', -tiltIncrement.current)}}
           onMouseUp={stopMovement}
           onMouseLeave={stopMovement}
         >↓</button>
@@ -217,13 +277,13 @@ const PTZControl = ({ cameraLabel, closeModal }) => {
       <div className="ptz-zoom">
         <button
           className="ptz-button"
-          onMouseDown={() =>  {mouseDownRef.current= true; startContinuousMovement('zoom', 2000)}}
+          onMouseDown={() =>  {mouseDownRef.current= true; startContinuousMovement('zoom', zoomIncrement.current)}}
           onMouseUp={stopMovement}
           onMouseLeave={stopMovement}
         >+</button>
         <button
           className="ptz-button"
-          onMouseDown={() =>  {mouseDownRef.current= true; startContinuousMovement('zoom', -2000)}}
+          onMouseDown={() =>  {mouseDownRef.current= true; startContinuousMovement('zoom', -zoomIncrement.current)}}
           onMouseUp={stopMovement}
           onMouseLeave={stopMovement}
         >-</button>
